@@ -19,14 +19,12 @@ use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-    JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation,
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
+    JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES, JOB_OBJECT_UILIMIT_READCLIPBOARD,
+    JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
     JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_UILIMIT_DESKTOP,
-    JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
-    JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
-    JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
-    JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+    JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
 
 /// RAII job object. `Drop` closes the handle; with
@@ -39,13 +37,10 @@ impl Job {
     pub fn new() -> Result<Self> {
         // Wrap the raw handle in `Self` immediately so a `?` from
         // either `SetInformationJobObject` below still closes it.
-        let job = unsafe {
-            Self(CreateJobObjectW(None, None).context("CreateJobObjectW")?)
-        };
+        let job = unsafe { Self(CreateJobObjectW(None, None).context("CreateJobObjectW")?) };
         unsafe {
             let mut ext: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
-            ext.BasicLimitInformation.LimitFlags =
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            ext.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             SetInformationJobObject(
                 job.0,
                 JobObjectExtendedLimitInformation,
@@ -86,10 +81,7 @@ impl Job {
 
     /// Assign a (suspended) process to the job.
     pub fn assign(&self, proc: HANDLE) -> Result<()> {
-        unsafe {
-            AssignProcessToJobObject(self.0, proc)
-                .context("AssignProcessToJobObject")
-        }
+        unsafe { AssignProcessToJobObject(self.0, proc).context("AssignProcessToJobObject") }
     }
 }
 

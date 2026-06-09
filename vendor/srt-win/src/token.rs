@@ -15,24 +15,20 @@
 //! `(A;;CC;;;<group_sid>)` matches only when the group is *enabled*
 //! — i.e. on the broker, never on the sandbox child.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::ffi::c_void;
 use std::mem::size_of;
 use windows::Win32::Foundation::{HANDLE, LUID};
 use windows::Win32::Security::{
-    AddAccessAllowedAce, AllocateAndInitializeSid, CreateRestrictedToken,
-    DuplicateTokenEx, FreeSid, GetLengthSid, GetTokenInformation,
-    InitializeAcl, LookupPrivilegeValueW, SecurityImpersonation,
-    SetTokenInformation, TokenDefaultDacl, TokenGroups, TokenIntegrityLevel,
-    TokenPrimary, TokenPrivileges, ACL, ACL_REVISION, LUA_TOKEN,
-    LUID_AND_ATTRIBUTES, PSID, SID_AND_ATTRIBUTES, SID_IDENTIFIER_AUTHORITY,
-    TOKEN_ALL_ACCESS, TOKEN_DEFAULT_DACL, TOKEN_GROUPS,
-    TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL, TOKEN_PRIVILEGES,
+    ACL, ACL_REVISION, AddAccessAllowedAce, AllocateAndInitializeSid, CreateRestrictedToken,
+    DuplicateTokenEx, FreeSid, GetLengthSid, GetTokenInformation, InitializeAcl, LUA_TOKEN,
+    LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, PSID, SID_AND_ATTRIBUTES, SID_IDENTIFIER_AUTHORITY,
+    SecurityImpersonation, SetTokenInformation, TOKEN_ALL_ACCESS, TOKEN_DEFAULT_DACL, TOKEN_GROUPS,
+    TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL, TOKEN_PRIVILEGES, TokenDefaultDacl,
+    TokenGroups, TokenIntegrityLevel, TokenPrimary, TokenPrivileges,
 };
 use windows::Win32::System::SystemServices::SE_GROUP_LOGON_ID;
-use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcessToken,
-};
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::sid::LocalPsid;
 use crate::util::{pcwstr, wstr};
@@ -84,7 +80,10 @@ pub fn make_sandbox_token(base: HANDLE, group_sid: &str) -> Result<HANDLE> {
     }
     let disable: Vec<SID_AND_ATTRIBUTES> = psids
         .into_iter()
-        .map(|s| SID_AND_ATTRIBUTES { Sid: s, Attributes: 0 })
+        .map(|s| SID_AND_ATTRIBUTES {
+            Sid: s,
+            Attributes: 0,
+        })
         .collect();
 
     // Privileges to delete: everything in `base` except
@@ -97,13 +96,15 @@ pub fn make_sandbox_token(base: HANDLE, group_sid: &str) -> Result<HANDLE> {
             base,
             LUA_TOKEN,
             Some(&disable),
-            if to_delete.is_empty() { None } else { Some(&to_delete) },
+            if to_delete.is_empty() {
+                None
+            } else {
+                Some(&to_delete)
+            },
             None, // RestrictingSids — intentionally empty
             &mut out,
         )
-        .with_context(|| {
-            format!("CreateRestrictedToken(disable=[Admins,{group_sid}])")
-        })?;
+        .with_context(|| format!("CreateRestrictedToken(disable=[Admins,{group_sid}])"))?;
     }
     // `admins` / `group` LocalPsid drop here → LocalFree.
 
@@ -154,10 +155,8 @@ fn set_il(tok: HANDLE, rid: u32) -> Result<()> {
             Value: [0, 0, 0, 0, 0, 16],
         };
         let mut sid = PSID::default();
-        AllocateAndInitializeSid(
-            &ml_auth, 1, rid, 0, 0, 0, 0, 0, 0, 0, &mut sid,
-        )
-        .context("AllocateAndInitializeSid(mandatory label)")?;
+        AllocateAndInitializeSid(&ml_auth, 1, rid, 0, 0, 0, 0, 0, 0, 0, &mut sid)
+            .context("AllocateAndInitializeSid(mandatory label)")?;
         let tml = TOKEN_MANDATORY_LABEL {
             Label: SID_AND_ATTRIBUTES {
                 Sid: sid,
@@ -194,10 +193,7 @@ fn set_default_dacl(tok: HANDLE, base: HANDLE) -> Result<()> {
     let groups_buf = get_token_info(base, TokenGroups)?;
     let logon = unsafe {
         let tg = &*(groups_buf.as_ptr() as *const TOKEN_GROUPS);
-        let arr = std::slice::from_raw_parts(
-            tg.Groups.as_ptr(),
-            tg.GroupCount as usize,
-        );
+        let arr = std::slice::from_raw_parts(tg.Groups.as_ptr(), tg.GroupCount as usize);
         arr.iter()
             .find(|g| g.Attributes & (SE_GROUP_LOGON_ID as u32) != 0)
             .map(|g| g.Sid)
@@ -218,8 +214,7 @@ fn set_default_dacl(tok: HANDLE, base: HANDLE) -> Result<()> {
     let mut buf = vec![0u8; total];
     let acl = buf.as_mut_ptr() as *mut ACL;
     unsafe {
-        InitializeAcl(acl, total as u32, ACL_REVISION)
-            .context("InitializeAcl(default DACL)")?;
+        InitializeAcl(acl, total as u32, ACL_REVISION).context("InitializeAcl(default DACL)")?;
         // GENERIC_ALL.
         const GENERIC_ALL: u32 = 0x1000_0000;
         for s in &sids {
@@ -244,9 +239,7 @@ fn get_token_info(tok: HANDLE, cls: TOKEN_INFORMATION_CLASS) -> Result<Vec<u8>> 
         let mut len = 0u32;
         let _ = GetTokenInformation(tok, cls, None, 0, &mut len);
         if len == 0 {
-            return Err(anyhow!(
-                "GetTokenInformation({cls:?}) sizing returned 0"
-            ));
+            return Err(anyhow!("GetTokenInformation({cls:?}) sizing returned 0"));
         }
         let mut buf = vec![0u8; len as usize];
         GetTokenInformation(
@@ -262,10 +255,7 @@ fn get_token_info(tok: HANDLE, cls: TOKEN_INFORMATION_CLASS) -> Result<Vec<u8>> 
 }
 
 /// Every privilege LUID in `base` except those named in `keep`.
-fn privileges_except(
-    base: HANDLE,
-    keep: &[&str],
-) -> Result<Vec<LUID_AND_ATTRIBUTES>> {
+fn privileges_except(base: HANDLE, keep: &[&str]) -> Result<Vec<LUID_AND_ATTRIBUTES>> {
     let keep_luids: Vec<LUID> = keep
         .iter()
         .filter_map(|n| {
@@ -278,16 +268,13 @@ fn privileges_except(
     let buf = get_token_info(base, TokenPrivileges)?;
     unsafe {
         let tp = &*(buf.as_ptr() as *const TOKEN_PRIVILEGES);
-        let arr = std::slice::from_raw_parts(
-            tp.Privileges.as_ptr(),
-            tp.PrivilegeCount as usize,
-        );
+        let arr = std::slice::from_raw_parts(tp.Privileges.as_ptr(), tp.PrivilegeCount as usize);
         Ok(arr
             .iter()
             .filter(|p| {
-                !keep_luids.iter().any(|k| {
-                    k.LowPart == p.Luid.LowPart && k.HighPart == p.Luid.HighPart
-                })
+                !keep_luids
+                    .iter()
+                    .any(|k| k.LowPart == p.Luid.LowPart && k.HighPart == p.Luid.HighPart)
             })
             .map(|p| LUID_AND_ATTRIBUTES {
                 Luid: p.Luid,
@@ -322,8 +309,7 @@ mod tests {
     #[test]
     fn privileges_except_keeps_change_notify() {
         let base = open_self_token().expect("open_self_token");
-        let to_delete =
-            privileges_except(base, &["SeChangeNotifyPrivilege"]).unwrap();
+        let to_delete = privileges_except(base, &["SeChangeNotifyPrivilege"]).unwrap();
         // Resolve SeChangeNotifyPrivilege's LUID and assert it's NOT
         // in the deletion set.
         let mut keep = LUID::default();
@@ -333,8 +319,9 @@ mod tests {
             let _ = CloseHandle(base);
         }
         assert!(
-            !to_delete.iter().any(|p| p.Luid.LowPart == keep.LowPart
-                && p.Luid.HighPart == keep.HighPart),
+            !to_delete
+                .iter()
+                .any(|p| p.Luid.LowPart == keep.LowPart && p.Luid.HighPart == keep.HighPart),
             "SeChangeNotifyPrivilege must not be in the deletion set"
         );
     }

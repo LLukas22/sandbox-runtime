@@ -1,8 +1,8 @@
 //! Small Win32 string helpers shared by `sid.rs` and `wfp.rs`.
 
 use std::ffi::c_void;
+use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{LocalFree, HLOCAL};
 
 /// UTF-8 → NUL-terminated UTF-16 buffer. Keep the returned `Vec`
 /// alive for as long as the resulting `PCWSTR` / `PWSTR` is in use.

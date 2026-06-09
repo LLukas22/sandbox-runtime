@@ -58,41 +58,35 @@
 // significantly less readable here than field-by-field assignment.
 #![allow(clippy::field_reassign_with_default)]
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::ffi::c_void;
-use windows::core::{GUID, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{
-    LocalFree, ERROR_MEMBER_IN_ALIAS, HANDLE, HLOCAL,
-};
+use windows::Win32::Foundation::{ERROR_MEMBER_IN_ALIAS, HANDLE, HLOCAL, LocalFree};
 use windows::Win32::NetworkManagement::NetManagement::{
+    LOCALGROUP_INFO_1, LOCALGROUP_MEMBERS_INFO_0, NERR_GroupExists, NERR_GroupNotFound,
     NetLocalGroupAdd, NetLocalGroupAddMembers, NetLocalGroupDel,
-    NERR_GroupExists, NERR_GroupNotFound, LOCALGROUP_INFO_1,
-    LOCALGROUP_MEMBERS_INFO_0,
 };
 use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0,
-    FwpmFilterCreateEnumHandle0, FwpmFilterDeleteByKey0,
-    FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0, FwpmFreeMemory0,
-    FwpmSubLayerAdd0, FwpmSubLayerDeleteByKey0, FwpmTransactionAbort0,
-    FwpmTransactionBegin0, FwpmTransactionCommit0, FWPM_ACTION0,
-    FWPM_ACTION0_0, FWPM_CONDITION_ALE_USER_ID,
-    FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_CONDITION_IP_REMOTE_PORT,
-    FWPM_DISPLAY_DATA0, FWPM_FILTER0, FWPM_FILTER_CONDITION0,
-    FWPM_FILTER_ENUM_TEMPLATE0, FWPM_FILTER_FLAG_PERSISTENT,
-    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-    FWPM_SUBLAYER0, FWPM_SUBLAYER_FLAG_PERSISTENT, FWP_ACTION_BLOCK,
-    FWP_ACTION_PERMIT, FWP_ACTION_TYPE, FWP_BYTE_ARRAY16,
-    FWP_BYTE_ARRAY16_TYPE, FWP_BYTE_BLOB, FWP_CONDITION_VALUE0,
-    FWP_CONDITION_VALUE0_0, FWP_FILTER_ENUM_OVERLAPPING, FWP_MATCH_EQUAL,
-    FWP_MATCH_RANGE, FWP_RANGE0, FWP_RANGE_TYPE,
-    FWP_SECURITY_DESCRIPTOR_TYPE, FWP_UINT16, FWP_UINT64,
-    FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_VALUE0, FWP_VALUE0_0,
+    FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTION_TYPE, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE,
+    FWP_BYTE_BLOB, FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_FILTER_ENUM_OVERLAPPING,
+    FWP_MATCH_EQUAL, FWP_MATCH_RANGE, FWP_RANGE_TYPE, FWP_RANGE0, FWP_SECURITY_DESCRIPTOR_TYPE,
+    FWP_UINT16, FWP_UINT64, FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_VALUE0, FWP_VALUE0_0,
+    FWPM_ACTION0, FWPM_ACTION0_0, FWPM_CONDITION_ALE_USER_ID, FWPM_CONDITION_IP_REMOTE_ADDRESS,
+    FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0, FWPM_FILTER_CONDITION0,
+    FWPM_FILTER_ENUM_TEMPLATE0, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0,
+    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_SUBLAYER_FLAG_PERSISTENT,
+    FWPM_SUBLAYER0, FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterCreateEnumHandle0,
+    FwpmFilterDeleteByKey0, FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0, FwpmFreeMemory0,
+    FwpmSubLayerAdd0, FwpmSubLayerDeleteByKey0, FwpmTransactionAbort0, FwpmTransactionBegin0,
+    FwpmTransactionCommit0,
 };
 use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
-use windows::Win32::Security::{
-    GetSecurityDescriptorLength, PSECURITY_DESCRIPTOR,
+use windows::Win32::Security::{GetSecurityDescriptorLength, PSECURITY_DESCRIPTOR};
+use windows::Win32::System::Registry::{
+    HKEY, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
+    RegCreateKeyExW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
 };
+use windows::core::{GUID, PCWSTR, PWSTR};
 
 use crate::sid;
 use crate::util::{pcwstr, wstr};
@@ -103,8 +97,7 @@ const GROUP_COMMENT: &str = "sandbox-runtime network sandbox membership";
 /// previous install. Overridable via `--sublayer-guid` so an
 /// enterprise that provisions WFP via its own tooling can point us at
 /// theirs. {2c5d0ad6-5f3b-4d4e-9b8f-1a3e7c9d0b21}
-pub const DEFAULT_SUBLAYER_GUID: GUID =
-    GUID::from_u128(0x2c5d0ad6_5f3b_4d4e_9b8f_1a3e7c9d0b21);
+pub const DEFAULT_SUBLAYER_GUID: GUID = GUID::from_u128(0x2c5d0ad6_5f3b_4d4e_9b8f_1a3e7c9d0b21);
 
 /// Default loopback port range for filter 2. The JS http/socks
 /// proxies bind inside this range on Windows so the sandboxed child
@@ -148,9 +141,7 @@ impl OwnedSd {
                 Some(&mut sz),
             )
             .map_err(|e| {
-                anyhow!(
-                    "ConvertStringSecurityDescriptorToSecurityDescriptorW({sddl}): {e}"
-                )
+                anyhow!("ConvertStringSecurityDescriptorToSecurityDescriptorW({sddl}): {e}")
             })?;
             if sz == 0 {
                 sz = GetSecurityDescriptorLength(psd);
@@ -183,9 +174,7 @@ impl EngineHandle {
     fn open() -> Result<Self> {
         let mut h = HANDLE::default();
         // RPC_C_AUTHN_DEFAULT
-        let rc = unsafe {
-            FwpmEngineOpen0(PCWSTR::null(), 0xFFFF_FFFF, None, None, &mut h)
-        };
+        let rc = unsafe { FwpmEngineOpen0(PCWSTR::null(), 0xFFFF_FFFF, None, None, &mut h) };
         if rc != 0 {
             return Err(anyhow!("FwpmEngineOpen0 failed: 0x{rc:08x}"));
         }
@@ -223,17 +212,12 @@ fn cond_sd(field_key: GUID, blob: &mut FWP_BYTE_BLOB) -> FWPM_FILTER_CONDITION0 
         matchType: FWP_MATCH_EQUAL,
         conditionValue: FWP_CONDITION_VALUE0 {
             r#type: FWP_SECURITY_DESCRIPTOR_TYPE,
-            Anonymous: FWP_CONDITION_VALUE0_0 {
-                sd: blob as *mut _,
-            },
+            Anonymous: FWP_CONDITION_VALUE0_0 { sd: blob as *mut _ },
         },
     }
 }
 
-fn cond_v4_subnet(
-    field_key: GUID,
-    am: &mut FWP_V4_ADDR_AND_MASK,
-) -> FWPM_FILTER_CONDITION0 {
+fn cond_v4_subnet(field_key: GUID, am: &mut FWP_V4_ADDR_AND_MASK) -> FWPM_FILTER_CONDITION0 {
     FWPM_FILTER_CONDITION0 {
         fieldKey: field_key,
         matchType: FWP_MATCH_EQUAL,
@@ -246,10 +230,7 @@ fn cond_v4_subnet(
     }
 }
 
-fn cond_v6_addr(
-    field_key: GUID,
-    addr: &mut FWP_BYTE_ARRAY16,
-) -> FWPM_FILTER_CONDITION0 {
+fn cond_v6_addr(field_key: GUID, addr: &mut FWP_BYTE_ARRAY16) -> FWPM_FILTER_CONDITION0 {
     FWPM_FILTER_CONDITION0 {
         fieldKey: field_key,
         matchType: FWP_MATCH_EQUAL,
@@ -269,10 +250,7 @@ fn fwp_uint16(v: u16) -> FWP_VALUE0 {
     }
 }
 
-fn cond_port_range(
-    field_key: GUID,
-    range: &mut FWP_RANGE0,
-) -> FWPM_FILTER_CONDITION0 {
+fn cond_port_range(field_key: GUID, range: &mut FWP_RANGE0) -> FWPM_FILTER_CONDITION0 {
     FWPM_FILTER_CONDITION0 {
         fieldKey: field_key,
         matchType: FWP_MATCH_RANGE,
@@ -338,12 +316,7 @@ pub fn ensure_group(name: &str, user_sid: &str) -> Result<()> {
             lgrpi1_name: PWSTR(name_w.as_mut_ptr()),
             lgrpi1_comment: PWSTR(comment_w.as_mut_ptr()),
         };
-        let rc = NetLocalGroupAdd(
-            PCWSTR::null(),
-            1,
-            &info as *const _ as *const u8,
-            None,
-        );
+        let rc = NetLocalGroupAdd(PCWSTR::null(), 1, &info as *const _ as *const u8, None);
         // SAM returns ERROR_ALIAS_EXISTS (1379) for an existing local
         // group; some paths return NERR_GroupExists (2223). Either is
         // fine for idempotency.
@@ -366,9 +339,7 @@ pub fn ensure_group(name: &str, user_sid: &str) -> Result<()> {
             1,
         );
         if rc != 0 && rc != ERROR_MEMBER_IN_ALIAS.0 {
-            return Err(anyhow!(
-                "NetLocalGroupAddMembers({name}, {user_sid}): {rc}"
-            ));
+            return Err(anyhow!("NetLocalGroupAddMembers({name}, {user_sid}): {rc}"));
         }
     }
     Ok(())
@@ -417,9 +388,7 @@ fn for_each_tagged_filter(
         tmpl.enumType = FWP_FILTER_ENUM_OVERLAPPING;
         tmpl.actionMask = 0xFFFF_FFFF;
         let mut h = HANDLE::default();
-        let rc = unsafe {
-            FwpmFilterCreateEnumHandle0(engine.h(), Some(&tmpl), &mut h)
-        };
+        let rc = unsafe { FwpmFilterCreateEnumHandle0(engine.h(), Some(&tmpl), &mut h) };
         if rc != 0 {
             return Err(anyhow!(
                 "FwpmFilterCreateEnumHandle0({layer_name}): 0x{rc:08x}"
@@ -428,16 +397,12 @@ fn for_each_tagged_filter(
         loop {
             let mut entries: *mut *mut FWPM_FILTER0 = std::ptr::null_mut();
             let mut n: u32 = 0;
-            let rc = unsafe {
-                FwpmFilterEnum0(engine.h(), h, 256, &mut entries, &mut n)
-            };
+            let rc = unsafe { FwpmFilterEnum0(engine.h(), h, 256, &mut entries, &mut n) };
             if rc != 0 {
                 unsafe {
                     let _ = FwpmFilterDestroyEnumHandle0(engine.h(), h);
                 }
-                return Err(anyhow!(
-                    "FwpmFilterEnum0({layer_name}): 0x{rc:08x}"
-                ));
+                return Err(anyhow!("FwpmFilterEnum0({layer_name}): 0x{rc:08x}"));
             }
             if n == 0 {
                 if !entries.is_null() {
@@ -447,8 +412,7 @@ fn for_each_tagged_filter(
                 }
                 break;
             }
-            let slice =
-                unsafe { std::slice::from_raw_parts(entries, n as usize) };
+            let slice = unsafe { std::slice::from_raw_parts(entries, n as usize) };
             for &fp in slice {
                 if fp.is_null() {
                     continue;
@@ -457,9 +421,7 @@ fn for_each_tagged_filter(
                 if &flt.subLayerKey != sublayer {
                     continue;
                 }
-                if flt.providerData.size == 0
-                    || flt.providerData.data.is_null()
-                {
+                if flt.providerData.size == 0 || flt.providerData.data.is_null() {
                     continue;
                 }
                 let bytes = unsafe {
@@ -494,10 +456,7 @@ fn for_each_tagged_filter(
 
 /// Delete every srt-win-tagged filter under `sublayer`. Returns the
 /// number deleted. Does not delete the sublayer itself.
-fn delete_tagged_filters(
-    engine: &EngineHandle,
-    sublayer: &GUID,
-) -> Result<usize> {
+fn delete_tagged_filters(engine: &EngineHandle, sublayer: &GUID) -> Result<usize> {
     // Collect across both layers, then delete. Deletion is by global
     // filterKey GUID inside one txn, so per-layer ordering is not
     // load-bearing.
@@ -511,9 +470,7 @@ fn delete_tagged_filters(
         if rc == 0 {
             deleted += 1;
         } else if rc != FWP_E_FILTER_NOT_FOUND {
-            return Err(anyhow!(
-                "FwpmFilterDeleteByKey0({key:?}): 0x{rc:08x}"
-            ));
+            return Err(anyhow!("FwpmFilterDeleteByKey0({key:?}): 0x{rc:08x}"));
         }
     }
     Ok(deleted)
@@ -602,18 +559,12 @@ pub const SDDL_EVERYONE: &str = "O:LSG:LSD:(A;;CC;;;WD)";
 /// permit is restricted to `port_range` (inclusive). Idempotent:
 /// any existing srt-win-tagged filters are deleted first, then a
 /// fresh set is added, all inside one WFP transaction.
-pub fn install_filters(
-    sublayer: &GUID,
-    group_sid: &str,
-    port_range: (u16, u16),
-) -> Result<()> {
+pub fn install_filters(sublayer: &GUID, group_sid: &str, port_range: (u16, u16)) -> Result<()> {
     debug_assert!(port_range.0 <= port_range.1);
-    let sd_nonmember = OwnedSd::from_sddl(&sddl_nonmember(group_sid))
-        .context("build non-member SD")?;
-    let sd_group = OwnedSd::from_sddl(&sddl_group(group_sid))
-        .context("build group SD")?;
-    let sd_everyone =
-        OwnedSd::from_sddl(SDDL_EVERYONE).context("build Everyone SD")?;
+    let sd_nonmember =
+        OwnedSd::from_sddl(&sddl_nonmember(group_sid)).context("build non-member SD")?;
+    let sd_group = OwnedSd::from_sddl(&sddl_group(group_sid)).context("build group SD")?;
+    let sd_everyone = OwnedSd::from_sddl(SDDL_EVERYONE).context("build Everyone SD")?;
 
     let engine = EngineHandle::open()?;
     let rc = unsafe { FwpmTransactionBegin0(engine.h(), 0) };
@@ -625,8 +576,7 @@ pub fn install_filters(
         // Sublayer (idempotent). Display name identifies the owning
         // tool, not the group.
         let mut sl_name = wstr("srt-win");
-        let mut sl_desc =
-            wstr("sandbox-runtime WFP sublayer (deny-only-group fence)");
+        let mut sl_desc = wstr("sandbox-runtime WFP sublayer (deny-only-group fence)");
         let sl = FWPM_SUBLAYER0 {
             subLayerKey: *sublayer,
             displayData: FWPM_DISPLAY_DATA0 {
@@ -688,10 +638,7 @@ pub fn install_filters(
             (FWPM_LAYER_ALE_AUTH_CONNECT_V6, "v6"),
         ] {
             // 0 — PERMIT non-member.
-            let mut c0 = [cond_sd(
-                FWPM_CONDITION_ALE_USER_ID,
-                &mut sd_nonmember_blob,
-            )];
+            let mut c0 = [cond_sd(FWPM_CONDITION_ALE_USER_ID, &mut sd_nonmember_blob)];
             add_filter(
                 engine.h(),
                 sublayer,
@@ -704,8 +651,7 @@ pub fn install_filters(
             )?;
 
             // 1 — PERMIT group-enabled.
-            let mut c1 =
-                [cond_sd(FWPM_CONDITION_ALE_USER_ID, &mut sd_group_blob)];
+            let mut c1 = [cond_sd(FWPM_CONDITION_ALE_USER_ID, &mut sd_group_blob)];
             add_filter(
                 engine.h(),
                 sublayer,
@@ -720,19 +666,13 @@ pub fn install_filters(
             // 2 — PERMIT loopback ∩ port-range (no user condition).
             // Two conditions on different fieldKeys → ANDed by WFP.
             let addr_cond = if label == "v4" {
-                cond_v4_subnet(
-                    FWPM_CONDITION_IP_REMOTE_ADDRESS,
-                    &mut v4_loop,
-                )
+                cond_v4_subnet(FWPM_CONDITION_IP_REMOTE_ADDRESS, &mut v4_loop)
             } else {
                 cond_v6_addr(FWPM_CONDITION_IP_REMOTE_ADDRESS, &mut v6_loop)
             };
             let mut c2 = [
                 addr_cond,
-                cond_port_range(
-                    FWPM_CONDITION_IP_REMOTE_PORT,
-                    &mut port_range_slot,
-                ),
+                cond_port_range(FWPM_CONDITION_IP_REMOTE_PORT, &mut port_range_slot),
             ];
             add_filter(
                 engine.h(),
@@ -746,10 +686,7 @@ pub fn install_filters(
             )?;
 
             // 3 — BLOCK Everyone.
-            let mut c3 = [cond_sd(
-                FWPM_CONDITION_ALE_USER_ID,
-                &mut sd_everyone_blob,
-            )];
+            let mut c3 = [cond_sd(FWPM_CONDITION_ALE_USER_ID, &mut sd_everyone_blob)];
             add_filter(
                 engine.h(),
                 sublayer,
@@ -775,6 +712,11 @@ pub fn install_filters(
     if rc != 0 {
         return Err(anyhow!("FwpmTransactionCommit0: 0x{rc:08x}"));
     }
+    let _ = write_status_cache(&WfpStatus {
+        state: "installed".into(),
+        filters: 8,
+        port_range: Some([port_range.0, port_range.1]),
+    });
     Ok(())
 }
 
@@ -811,6 +753,11 @@ pub fn uninstall_filters(sublayer: &GUID) -> Result<usize> {
     if rc != 0 {
         return Err(anyhow!("FwpmTransactionCommit0: 0x{rc:08x}"));
     }
+    let _ = write_status_cache(&WfpStatus {
+        state: "absent".into(),
+        filters: 0,
+        port_range: None,
+    });
     Ok(n)
 }
 
@@ -821,15 +768,123 @@ pub fn uninstall_filters(sublayer: &GUID) -> Result<usize> {
 /// `port_range` is read from the first `permit-loopback` tag;
 /// `None` when no loopback filter is present or it predates the
 /// port-range design.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct WfpStatus {
-    pub state: &'static str,
+    pub state: String,
     pub filters: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port_range: Option<[u16; 2]>,
 }
 
-pub fn filter_status(sublayer: &GUID) -> Result<WfpStatus> {
+// ────────────────────── registry status cache ──────────────────────
+
+const REGISTRY_SUBKEY: &str = "SOFTWARE\\sandbox-runtime";
+const REGISTRY_VALUE: &str = "WfpState";
+
+struct RegKey(HKEY);
+
+impl Drop for RegKey {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                let _ = RegCloseKey(self.0);
+            }
+        }
+    }
+}
+
+pub fn write_status_cache(status: &WfpStatus) -> Result<()> {
+    let subkey = wstr(REGISTRY_SUBKEY);
+    let mut hkey = HKEY::default();
+    let rc = unsafe {
+        RegCreateKeyExW(
+            HKEY_LOCAL_MACHINE,
+            pcwstr(&subkey),
+            Some(0),
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            None,
+            &mut hkey,
+            None,
+        )
+    };
+    if rc.is_err() {
+        return Err(anyhow!(
+            "RegCreateKeyExW(HKLM\\{REGISTRY_SUBKEY}): {}",
+            rc.0
+        ));
+    }
+    let key = RegKey(hkey);
+    let json = serde_json::to_string(status)?;
+    let json_w = wstr(&json);
+    let bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(json_w.as_ptr() as *const u8, json_w.len() * 2) };
+    let value_name = wstr(REGISTRY_VALUE);
+    let rc = unsafe { RegSetValueExW(key.0, pcwstr(&value_name), Some(0), REG_SZ, Some(bytes)) };
+    if rc.is_err() {
+        return Err(anyhow!("RegSetValueExW({REGISTRY_VALUE}): {}", rc.0));
+    }
+    Ok(())
+}
+
+fn read_status_cache() -> Result<WfpStatus> {
+    let subkey = wstr(REGISTRY_SUBKEY);
+    let mut hkey = HKEY::default();
+    let rc = unsafe {
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            pcwstr(&subkey),
+            Some(0),
+            KEY_READ,
+            &mut hkey,
+        )
+    };
+    if rc.is_err() {
+        return Err(anyhow!("RegOpenKeyExW(HKLM\\{REGISTRY_SUBKEY}): {}", rc.0));
+    }
+    let key = RegKey(hkey);
+    let value_name = wstr(REGISTRY_VALUE);
+    let mut buf_size: u32 = 0;
+    let rc = unsafe {
+        RegQueryValueExW(
+            key.0,
+            pcwstr(&value_name),
+            None,
+            None,
+            None,
+            Some(&mut buf_size),
+        )
+    };
+    if rc.is_err() || buf_size == 0 {
+        return Err(anyhow!("RegQueryValueExW({REGISTRY_VALUE}) size: {}", rc.0));
+    }
+    let mut buf: Vec<u8> = vec![0u8; buf_size as usize];
+    let rc = unsafe {
+        RegQueryValueExW(
+            key.0,
+            pcwstr(&value_name),
+            None,
+            None,
+            Some(buf.as_mut_ptr()),
+            Some(&mut buf_size),
+        )
+    };
+    if rc.is_err() {
+        return Err(anyhow!("RegQueryValueExW({REGISTRY_VALUE}) read: {}", rc.0));
+    }
+    buf.truncate(buf_size as usize);
+    let wide: &[u16] =
+        unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u16, buf.len() / 2) };
+    let json = String::from_utf16_lossy(wide)
+        .trim_end_matches('\0')
+        .to_owned();
+    serde_json::from_str(&json).with_context(|| format!("parse cached WfpState: {json:?}"))
+}
+
+// ────────────────────── filter status ──────────────────────
+
+fn filter_status_live(sublayer: &GUID) -> Result<WfpStatus> {
     let engine = EngineHandle::open()?;
     let mut filters = 0usize;
     let mut have_permit_group = false;
@@ -851,7 +906,25 @@ pub fn filter_status(sublayer: &GUID) -> Result<WfpStatus> {
     } else {
         "absent"
     };
-    Ok(WfpStatus { state, filters, port_range })
+    Ok(WfpStatus {
+        state: state.into(),
+        filters,
+        port_range,
+    })
+}
+
+/// Query WFP filter status. Tries live WFP enumeration first; if
+/// that fails (e.g. access denied without elevation), falls back to
+/// reading the registry cache written by the last elevated
+/// install/uninstall.
+pub fn filter_status(sublayer: &GUID) -> Result<WfpStatus> {
+    match filter_status_live(sublayer) {
+        Ok(st) => Ok(st),
+        Err(live_err) => match read_status_cache() {
+            Ok(cached) => Ok(cached),
+            Err(_) => Err(live_err),
+        },
+    }
 }
 
 /// Parse a `--proxy-port-range LOW-HIGH` argument. Both ends are
@@ -977,10 +1050,8 @@ mod tests {
 
     #[test]
     fn parse_guid_accepts_both_forms() {
-        let g1 =
-            parse_guid("2c5d0ad6-5f3b-4d4e-9b8f-1a3e7c9d0b21").unwrap();
-        let g2 =
-            parse_guid("{2c5d0ad6-5f3b-4d4e-9b8f-1a3e7c9d0b21}").unwrap();
+        let g1 = parse_guid("2c5d0ad6-5f3b-4d4e-9b8f-1a3e7c9d0b21").unwrap();
+        let g2 = parse_guid("{2c5d0ad6-5f3b-4d4e-9b8f-1a3e7c9d0b21}").unwrap();
         assert_eq!(g1, g2);
         assert_eq!(g1, DEFAULT_SUBLAYER_GUID);
     }

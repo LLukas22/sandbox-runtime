@@ -9,27 +9,25 @@
 //! JS-side proxies (whose ports the caller passes) via the WFP
 //! loopback permit installed by `srt-win wfp install`.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
 use std::path::Path;
-use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
-    WAIT_OBJECT_0,
+    CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation, WAIT_OBJECT_0,
 };
 use windows::Win32::System::Console::{
     GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
 };
 use windows::Win32::System::Threading::{
-    CreateProcessAsUserW, DeleteProcThreadAttributeList, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, ResumeThread, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject, CREATE_SUSPENDED,
-    CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, STARTUPINFOEXW, STARTUPINFOW,
+    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, INFINITE,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+    PROCESS_INFORMATION, ResumeThread, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
+use windows::core::{PCWSTR, PWSTR};
 
 use crate::job::Job;
 use crate::self_protect;
@@ -44,12 +42,16 @@ use crate::winsta::WinStaDesk;
 /// the like — anything where the only cleanup is `CloseHandle`.
 struct OwnedHandle(HANDLE);
 impl OwnedHandle {
-    fn raw(&self) -> HANDLE { self.0 }
+    fn raw(&self) -> HANDLE {
+        self.0
+    }
 }
 impl Drop for OwnedHandle {
     fn drop(&mut self) {
         if !self.0.is_invalid() {
-            unsafe { let _ = CloseHandle(self.0); }
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
         }
     }
 }
@@ -67,12 +69,18 @@ impl SpawnedChild {
     fn new(pi: PROCESS_INFORMATION) -> Self {
         Self { pi, armed: true }
     }
-    fn process(&self) -> HANDLE { self.pi.hProcess }
-    fn thread(&self) -> HANDLE { self.pi.hThread }
+    fn process(&self) -> HANDLE {
+        self.pi.hProcess
+    }
+    fn thread(&self) -> HANDLE {
+        self.pi.hThread
+    }
     /// Disarm the terminate-on-drop. Call after the child has been
     /// assigned to the job AND resumed — past that point
     /// `KILL_ON_JOB_CLOSE` covers cleanup.
-    fn defuse(&mut self) { self.armed = false; }
+    fn defuse(&mut self) {
+        self.armed = false;
+    }
 }
 impl Drop for SpawnedChild {
     fn drop(&mut self) {
@@ -193,12 +201,9 @@ pub fn run(spec: &ExecSpec<'_>) -> Result<u32> {
     //    below closes whatever was already opened.
     let self_tok = OwnedHandle(open_self_token()?);
     let restricted = OwnedHandle(
-        token::make_sandbox_token(self_tok.raw(), spec.group_sid)
-            .context("make_sandbox_token")?,
+        token::make_sandbox_token(self_tok.raw(), spec.group_sid).context("make_sandbox_token")?,
     );
-    let primary = OwnedHandle(
-        to_primary(restricted.raw()).context("to_primary")?,
-    );
+    let primary = OwnedHandle(to_primary(restricted.raw()).context("to_primary")?);
 
     // 4) Job.
     let job = Job::new().context("Job::new")?;
@@ -253,9 +258,7 @@ pub fn run(spec: &ExecSpec<'_>) -> Result<u32> {
             // to take effect (documented Vista-era quirk: with
             // FALSE the kernel ignores the attribute entirely).
             true,
-            CREATE_SUSPENDED
-                | CREATE_UNICODE_ENVIRONMENT
-                | EXTENDED_STARTUPINFO_PRESENT,
+            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
             Some(env.as_mut_ptr() as *const c_void),
             // Inherit cwd.
             PCWSTR::null(),
@@ -265,12 +268,7 @@ pub fn run(spec: &ExecSpec<'_>) -> Result<u32> {
             &six.StartupInfo as *const STARTUPINFOW,
             &mut pi,
         )
-        .with_context(|| {
-            format!(
-                "CreateProcessAsUserW({})",
-                spec.target_exe.display()
-            )
-        })?;
+        .with_context(|| format!("CreateProcessAsUserW({})", spec.target_exe.display()))?;
     }
 
     // The child exists, suspended, NOT yet in the job. Wrap it
@@ -287,10 +285,7 @@ pub fn run(spec: &ExecSpec<'_>) -> Result<u32> {
     job.assign(child.process())?;
     let prev_suspend = unsafe { ResumeThread(child.thread()) };
     if prev_suspend == u32::MAX {
-        return Err(anyhow!(
-            "ResumeThread: {}",
-            std::io::Error::last_os_error()
-        ));
+        return Err(anyhow!("ResumeThread: {}", std::io::Error::last_os_error()));
     }
     // From here the job owns lifetime; disarm terminate-on-drop.
     child.defuse();
@@ -302,8 +297,7 @@ pub fn run(spec: &ExecSpec<'_>) -> Result<u32> {
     }
     let mut code: u32 = 0;
     unsafe {
-        GetExitCodeProcess(child.process(), &mut code)
-            .context("GetExitCodeProcess")?;
+        GetExitCodeProcess(child.process(), &mut code).context("GetExitCodeProcess")?;
     }
     // `child` (closes hProcess/hThread), `primary`/`restricted`/
     // `self_tok` (CloseHandle) all drop here.
@@ -401,11 +395,7 @@ fn add_proxy_case_twins(entries: &mut Vec<(String, String)>) {
 /// Public so `main.rs`'s self-elevate path can rebuild
 /// `lpParameters` from `std::env::args()`.
 pub fn quote_arg(a: &str) -> String {
-    if !a.is_empty()
-        && !a
-            .chars()
-            .any(|c| matches!(c, ' ' | '\t' | '"' | '\\'))
-    {
+    if !a.is_empty() && !a.chars().any(|c| matches!(c, ' ' | '\t' | '"' | '\\')) {
         return a.to_string();
     }
     let mut out = String::with_capacity(a.len() + 2);
@@ -444,9 +434,7 @@ pub fn quote_arg(a: &str) -> String {
 fn target_is_cmd(exe: &Path) -> bool {
     exe.file_name()
         .and_then(|n| n.to_str())
-        .map(|s| {
-            s.eq_ignore_ascii_case("cmd.exe") || s.eq_ignore_ascii_case("cmd")
-        })
+        .map(|s| s.eq_ignore_ascii_case("cmd.exe") || s.eq_ignore_ascii_case("cmd"))
         .unwrap_or(false)
 }
 
@@ -488,9 +476,8 @@ fn target_is_cmd(exe: &Path) -> bool {
 /// mis-parsed payloads containing `&` and was reverted.
 pub fn build_cmdline(exe: &Path, args: &[String]) -> String {
     let cmd_split = if target_is_cmd(exe) {
-        args.iter().position(|a| {
-            matches!(a.to_ascii_lowercase().as_str(), "/c" | "/k" | "/r")
-        })
+        args.iter()
+            .position(|a| matches!(a.to_ascii_lowercase().as_str(), "/c" | "/k" | "/r"))
     } else {
         None
     };
@@ -533,9 +520,7 @@ impl ProcThreadAttrs {
         // Sizing call — expected to fail with
         // ERROR_INSUFFICIENT_BUFFER and write the required size.
         unsafe {
-            let _ = InitializeProcThreadAttributeList(
-                None, count, None, &mut size,
-            );
+            let _ = InitializeProcThreadAttributeList(None, count, None, &mut size);
         }
         if size == 0 {
             return Err(anyhow!(
@@ -546,7 +531,7 @@ impl ProcThreadAttrs {
         unsafe {
             InitializeProcThreadAttributeList(
                 Some(LPPROC_THREAD_ATTRIBUTE_LIST(
-                    storage.as_mut_ptr() as *mut c_void,
+                    storage.as_mut_ptr() as *mut c_void
                 )),
                 count,
                 None,
@@ -622,9 +607,7 @@ fn collect_inheritable_std_handles() -> Vec<HANDLE> {
         }
         // Best-effort: a detached broker may have non-inheritable
         // (or pseudo) handles here; skip rather than fail.
-        let r = unsafe {
-            SetHandleInformation(h, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT)
-        };
+        let r = unsafe { SetHandleInformation(h, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT) };
         if r.is_ok() {
             out.push(h);
         }
@@ -659,8 +642,12 @@ mod tests {
         // inner quotes and metachars are NOT touched.
         let line = build_cmdline(
             exe,
-            &["/d".into(), "/s".into(), "/c".into(),
-              r#"echo "x & y""#.into()],
+            &[
+                "/d".into(),
+                "/s".into(),
+                "/c".into(),
+                r#"echo "x & y""#.into(),
+            ],
         );
         assert_eq!(
             line,
@@ -669,8 +656,14 @@ mod tests {
         // Multiple post-/c argv elements are joined with a space.
         let line2 = build_cmdline(
             exe,
-            &["/c".into(), "echo".into(), "a".into(), "&".into(),
-              "echo".into(), "b".into()],
+            &[
+                "/c".into(),
+                "echo".into(),
+                "a".into(),
+                "&".into(),
+                "echo".into(),
+                "b".into(),
+            ],
         );
         assert_eq!(
             line2,
@@ -703,7 +696,10 @@ mod tests {
                 "socks5h://localhost:60081".to_string(),
             ),
             // Mixed-case input → BOTH canonical forms appended.
-            ("Http_Proxy".to_string(), "http://localhost:60080".to_string()),
+            (
+                "Http_Proxy".to_string(),
+                "http://localhost:60080".to_string(),
+            ),
             // Names that merely contain or extend the suffix are not.
             ("FOO_PROXYX".to_string(), "x".to_string()),
             ("PATH".to_string(), r"C:\Windows".to_string()),

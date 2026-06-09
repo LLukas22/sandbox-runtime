@@ -15,15 +15,15 @@
 //! `SetProcessWindowStation`; we briefly attach to the new WS to
 //! create the desktop on it, then restore.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::ffi::c_void;
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::StationsAndDesktops::{
-    CloseDesktop, CloseWindowStation, CreateDesktopW, CreateWindowStationW,
-    GetProcessWindowStation, GetUserObjectInformationW,
-    SetProcessWindowStation, DESKTOP_CONTROL_FLAGS, HDESK, HWINSTA, UOI_NAME,
+    CloseDesktop, CloseWindowStation, CreateDesktopW, CreateWindowStationW, DESKTOP_CONTROL_FLAGS,
+    GetProcessWindowStation, GetUserObjectInformationW, HDESK, HWINSTA, SetProcessWindowStation,
+    UOI_NAME,
 };
+use windows::core::PCWSTR;
 
 use crate::util::wstr;
 
@@ -82,18 +82,14 @@ impl WinStaDesk {
                 unsafe {
                     let _ = CloseWindowStation(winsta);
                 }
-                return Err(anyhow!(
-                    "GetProcessWindowStation (snapshot): {e}"
-                ));
+                return Err(anyhow!("GetProcessWindowStation (snapshot): {e}"));
             }
         };
         if let Err(e) = unsafe { SetProcessWindowStation(winsta) } {
             unsafe {
                 let _ = CloseWindowStation(winsta);
             }
-            return Err(anyhow!(
-                "SetProcessWindowStation({ws_name}): {e}"
-            ));
+            return Err(anyhow!("SetProcessWindowStation({ws_name}): {e}"));
         }
 
         let desk_name_w = wstr("desk");
@@ -133,9 +129,7 @@ impl WinStaDesk {
                     let _ = CloseWindowStation(winsta);
                 }
                 return Err(match restore_r {
-                    Ok(()) => anyhow!(
-                        "CreateDesktopW(desk) on {ws_name}: {de}"
-                    ),
+                    Ok(()) => anyhow!("CreateDesktopW(desk) on {ws_name}: {de}"),
                     Err(re) => anyhow!(
                         "CreateDesktopW(desk) on {ws_name}: {de}; AND \
                          SetProcessWindowStation(restore) also \
@@ -148,7 +142,11 @@ impl WinStaDesk {
         // `<wsname>\desk` — backslash separator.
         let desk_path = wstr(&format!("{ws_name}\\desk"));
 
-        Ok(Self { winsta, desktop, desk_path })
+        Ok(Self {
+            winsta,
+            desktop,
+            desk_path,
+        })
     }
 
     /// Pointer to the wide name buffer for `STARTUPINFOW.lpDesktop`.
@@ -176,14 +174,10 @@ fn object_name(h: HANDLE) -> Result<String> {
     // Sizing call — expected to fail with ERROR_INSUFFICIENT_BUFFER
     // and write the required byte count.
     unsafe {
-        let _ = GetUserObjectInformationW(
-            h, UOI_NAME, None, 0, Some(&mut needed),
-        );
+        let _ = GetUserObjectInformationW(h, UOI_NAME, None, 0, Some(&mut needed));
     }
     if needed == 0 {
-        return Err(anyhow!(
-            "GetUserObjectInformationW sizing returned 0"
-        ));
+        return Err(anyhow!("GetUserObjectInformationW sizing returned 0"));
     }
     let mut buf = vec![0u8; needed as usize];
     unsafe {
@@ -198,12 +192,8 @@ fn object_name(h: HANDLE) -> Result<String> {
     }
     // SAFETY: `buf` is `needed` bytes, even-length (UTF-16);
     // reinterpret as u16.
-    let wide = unsafe {
-        std::slice::from_raw_parts(
-            buf.as_ptr() as *const u16,
-            (needed as usize) / 2,
-        )
-    };
+    let wide =
+        unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u16, (needed as usize) / 2) };
     let end = wide.iter().position(|&c| c == 0).unwrap_or(wide.len());
     Ok(String::from_utf16_lossy(&wide[..end]))
 }

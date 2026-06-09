@@ -13,8 +13,8 @@ pub mod sid;
 pub mod util;
 pub mod wfp;
 
-pub mod token;
 pub mod job;
-pub mod winsta;
-pub mod self_protect;
 pub mod launch;
+pub mod self_protect;
+pub mod token;
+pub mod winsta;

@@ -217,7 +217,7 @@ fn main() {
 
 #[cfg(windows)]
 fn run() -> anyhow::Result<()> {
-    use anyhow::{anyhow, Context};
+    use anyhow::{Context, anyhow};
     use serde_json::json;
     use srt_win::{sid, wfp};
 
@@ -231,19 +231,16 @@ fn run() -> anyhow::Result<()> {
     // single comparable representation; downstream
     // `eq_ignore_ascii_case("S-1-5-32-544")` dedup checks rely on
     // that.
-    let canonicalize_sid =
-        |flag: &str, s: &str| -> anyhow::Result<String> {
-            let p = sid::LocalPsid::from_string(s)
-                .with_context(|| format!("invalid --{flag} '{s}'"))?;
-            sid::psid_to_string(p.as_psid())
-                .with_context(|| format!("canonicalize --{flag} '{s}'"))
-        };
+    let canonicalize_sid = |flag: &str, s: &str| -> anyhow::Result<String> {
+        let p =
+            sid::LocalPsid::from_string(s).with_context(|| format!("invalid --{flag} '{s}'"))?;
+        sid::psid_to_string(p.as_psid()).with_context(|| format!("canonicalize --{flag} '{s}'"))
+    };
     let resolve_group_sid = |g: &GroupRef| -> anyhow::Result<String> {
         if let Some(s) = &g.group_sid {
             return canonicalize_sid("group-sid", s);
         }
-        sid::lookup_account_sid(&g.name)
-            .with_context(|| format!("resolve group '{}'", g.name))
+        sid::lookup_account_sid(&g.name).with_context(|| format!("resolve group '{}'", g.name))
     };
     let resolve_sublayer = |s: &Option<String>| -> anyhow::Result<windows::core::GUID> {
         match s {
@@ -313,8 +310,7 @@ fn run() -> anyhow::Result<()> {
                 } else {
                     let user = match &user_sid {
                         Some(s) => canonicalize_sid("user-sid", s)?,
-                        None => sid::current_user_sid()
-                            .context("resolve current user")?,
+                        None => sid::current_user_sid().context("resolve current user")?,
                     };
                     wfp::ensure_group(&group.name, &user)?;
                     let g = sid::lookup_account_sid(&group.name)?;
@@ -357,7 +353,9 @@ fn run() -> anyhow::Result<()> {
         }
 
         // ─── group ─────────────────────────────────────────────────
-        Cmd::Group { sub: GroupCmd::Create { group, user_sid } } => {
+        Cmd::Group {
+            sub: GroupCmd::Create { group, user_sid },
+        } => {
             if let Some(code) = maybe_self_elevate()? {
                 std::process::exit(code);
             }
@@ -369,8 +367,7 @@ fn run() -> anyhow::Result<()> {
             }
             let user = match &user_sid {
                 Some(s) => canonicalize_sid("user-sid", s)?,
-                None => sid::current_user_sid()
-                    .context("resolve current user")?,
+                None => sid::current_user_sid().context("resolve current user")?,
             };
             wfp::ensure_group(&group.name, &user)?;
             let gsid = sid::lookup_account_sid(&group.name)?;
@@ -383,7 +380,9 @@ fn run() -> anyhow::Result<()> {
                  Log out and back in before running `srt-win exec`."
             );
         }
-        Cmd::Group { sub: GroupCmd::Status { group } } => {
+        Cmd::Group {
+            sub: GroupCmd::Status { group },
+        } => {
             // Resolve SID first; if that fails the group is absent.
             let gsid = match &group.group_sid {
                 Some(s) => {
@@ -401,10 +400,7 @@ fn run() -> anyhow::Result<()> {
                         Ok(_) => {}
                         Err(e) => {
                             // Malformed SID string.
-                            println!(
-                                "{}",
-                                json!({"state": "absent", "error": e.to_string()})
-                            );
+                            println!("{}", json!({"state": "absent", "error": e.to_string()}));
                             return Ok(());
                         }
                     }
@@ -440,14 +436,14 @@ fn run() -> anyhow::Result<()> {
             };
             println!("{out}");
         }
-        Cmd::Group { sub: GroupCmd::Delete { group } } => {
+        Cmd::Group {
+            sub: GroupCmd::Delete { group },
+        } => {
             if let Some(code) = maybe_self_elevate()? {
                 std::process::exit(code);
             }
             if group.group_sid.is_some() {
-                return Err(anyhow!(
-                    "`group delete` needs --name; cannot delete by SID"
-                ));
+                return Err(anyhow!("`group delete` needs --name; cannot delete by SID"));
             }
             wfp::delete_group(&group.name)?;
             eprintln!("srt-win: group '{}' deleted (if it existed)", group.name);
@@ -479,12 +475,16 @@ fn run() -> anyhow::Result<()> {
                 range.0, range.1,
             );
         }
-        Cmd::Wfp { sub: WfpCmd::Status { sublayer_guid } } => {
+        Cmd::Wfp {
+            sub: WfpCmd::Status { sublayer_guid },
+        } => {
             let sl = resolve_sublayer(&sublayer_guid)?;
             let st = wfp::filter_status(&sl)?;
             println!("{}", serde_json::to_string(&st)?);
         }
-        Cmd::Wfp { sub: WfpCmd::Uninstall { sublayer_guid } } => {
+        Cmd::Wfp {
+            sub: WfpCmd::Uninstall { sublayer_guid },
+        } => {
             if let Some(code) = maybe_self_elevate()? {
                 std::process::exit(code);
             }
@@ -525,15 +525,12 @@ fn is_elevated() -> anyhow::Result<bool> {
     use std::mem::size_of;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::Security::{
-        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
     };
-    use windows::Win32::System::Threading::{
-        GetCurrentProcess, OpenProcessToken,
-    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     unsafe {
         let mut tok = HANDLE::default();
-        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut tok)
-            .context("OpenProcessToken")?;
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut tok).context("OpenProcessToken")?;
         let mut elev = TOKEN_ELEVATION::default();
         let mut ret = 0u32;
         let r = GetTokenInformation(
@@ -589,18 +586,13 @@ fn maybe_self_elevate() -> anyhow::Result<Option<i32>> {
     use anyhow::Context;
     use srt_win::launch::quote_arg;
     use srt_win::util::wstr;
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{
-        CloseHandle, ERROR_CANCELLED, GetLastError,
-    };
-    use windows::Win32::System::Threading::{
-        GetExitCodeProcess, WaitForSingleObject, INFINITE,
-    };
+    use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, GetLastError};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
     use windows::Win32::UI::Shell::{
-        ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SEE_MASK_NO_CONSOLE,
-        SHELLEXECUTEINFOW,
+        SEE_MASK_NO_CONSOLE, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
     };
     use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+    use windows::core::PCWSTR;
 
     if is_elevated()? {
         return Ok(None);
@@ -652,8 +644,7 @@ fn maybe_self_elevate() -> anyhow::Result<Option<i32>> {
     unsafe { WaitForSingleObject(h, INFINITE) };
     let mut code: u32 = 1;
     unsafe {
-        GetExitCodeProcess(h, &mut code)
-            .context("GetExitCodeProcess(elevated child)")?;
+        GetExitCodeProcess(h, &mut code).context("GetExitCodeProcess(elevated child)")?;
         let _ = CloseHandle(h);
     }
     Ok(Some(code as i32))

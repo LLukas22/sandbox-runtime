@@ -21,20 +21,20 @@
 //! can therefore open the broker. That's intentional — the threat
 //! model is the sandbox child, not the rest of the user's session.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::ffi::c_void;
 use std::mem::size_of;
-use windows::core::PWSTR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Security::Authorization::{
-    ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo,
-    SetSecurityInfo, SDDL_REVISION_1, SE_KERNEL_OBJECT,
+    ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
+    SE_KERNEL_OBJECT, SetSecurityInfo,
 };
 use windows::Win32::Security::{
-    AddAccessAllowedAce, GetLengthSid, InitializeAcl, ACL, ACL_REVISION,
-    DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    ACL, ACL_REVISION, AddAccessAllowedAce, DACL_SECURITY_INFORMATION, GetLengthSid, InitializeAcl,
+    PROTECTED_DACL_SECURITY_INFORMATION,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, PROCESS_ALL_ACCESS};
+use windows::core::PWSTR;
 
 use crate::sid::LocalPsid;
 
@@ -86,11 +86,9 @@ pub fn install_broker_dacl(group_sid: &str) -> Result<()> {
     let mut buf = vec![0u8; total];
     let acl = buf.as_mut_ptr() as *mut ACL;
     unsafe {
-        InitializeAcl(acl, total as u32, ACL_REVISION)
-            .context("InitializeAcl")?;
+        InitializeAcl(acl, total as u32, ACL_REVISION).context("InitializeAcl")?;
         for (s, mask) in &aces {
-            AddAccessAllowedAce(acl, ACL_REVISION, *mask, *s)
-                .context("AddAccessAllowedAce")?;
+            AddAccessAllowedAce(acl, ACL_REVISION, *mask, *s).context("AddAccessAllowedAce")?;
         }
         // PROTECTED strips inherited ACEs — without it the user
         // SID's default "full access to own process" inherited
@@ -105,9 +103,7 @@ pub fn install_broker_dacl(group_sid: &str) -> Result<()> {
             None,
         );
         if r.is_err() {
-            return Err(anyhow!(
-                "SetSecurityInfo(broker process DACL): {r:?}"
-            ));
+            return Err(anyhow!("SetSecurityInfo(broker process DACL): {r:?}"));
         }
     }
     // `buf` can drop here — `SetSecurityInfo` copies the ACL into
@@ -120,9 +116,7 @@ pub fn install_broker_dacl(group_sid: &str) -> Result<()> {
     // command. CI sets the env var so E6 still records the SDDL.
     if std::env::var_os("SANDBOX_RUNTIME_WIN_DEBUG").is_some() {
         match read_self_dacl_sddl() {
-            Some(sddl) => eprintln!(
-                "srt-win: self-protect applied (DACL: {sddl})"
-            ),
+            Some(sddl) => eprintln!("srt-win: self-protect applied (DACL: {sddl})"),
             None => eprintln!("srt-win: self-protect applied"),
         }
     }
