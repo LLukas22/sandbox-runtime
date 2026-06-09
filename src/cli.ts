@@ -233,11 +233,22 @@ async function main(): Promise<void> {
             command = options.c
             logForDebugging(`Command string mode (-c): ${command}`)
           } else if (commandArgs.length > 0) {
-            // Default mode: argv-style invocation. The result is later
-            // executed via `bash -c <command>`, so each arg must be
-            // shell-quoted to survive that re-parse — a plain join(' ')
-            // splits arguments containing whitespace (#157).
-            command = shellquote.quote(commandArgs)
+            if (process.platform === 'win32') {
+              // On Windows the command is passed to cmd.exe /c — use
+              // simple double-quote wrapping for args with spaces;
+              // POSIX shell-quote escaping (backslash) breaks in cmd.
+              command = commandArgs
+                .map(a =>
+                  a.includes(' ') || a.includes('\t') ? `"${a}"` : a,
+                )
+                .join(' ')
+            } else {
+              // macOS/Linux: executed via `bash -c <command>`, so each
+              // arg must be shell-quoted to survive that re-parse — a
+              // plain join(' ') splits arguments containing whitespace
+              // (#157).
+              command = shellquote.quote(commandArgs)
+            }
             logForDebugging(`Original command: ${command}`)
           } else {
             console.error(
